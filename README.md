@@ -12,3 +12,4 @@ The plugin has a single command:
 ```
 !card <card name>
 ```
+![Example](./pybot-card-example.png)
