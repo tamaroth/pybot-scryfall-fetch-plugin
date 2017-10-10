@@ -14,16 +14,22 @@ class card(plugin):
         card = ''.join(args)
         url = 'https://api.scryfall.com/cards/named?fuzzy=' + '+'.join(args)  + '&format=json'
         result = ''
-        with request.urlopen(url) as response:
-            result = response.read().decode('utf-8')
-        j = json.loads(result)
-        card = MtgCard(j)
-        for line in card.text:
-            self.bot.say(line)
+        try:
+            with request.urlopen(url) as response:
+                result = response.read().decode('utf-8')
+            j = json.loads(result)
+            card = MtgCard(j)
+            for line in card.text:
+                self.bot.say(line)
+        except error.HTTPError as e:
+            self.bot.say(f'Could not find the requested card... {" ".join(args)}')
+        except error.URLError as e:
+            self.bot.say(f'Requested url ({url}) is invalid')
+
 
 class MtgCard(object):
     def decorate_mana_cost(self, str):
-        str = str.replace('{W}', f'{color.white("{W}")}')
+        str = str.replace('{W}', f'{color.yellow("{W}")}')
         str = str.replace('{U}', f'{color.blue("{U}")}')
         str = str.replace('{R}', f'{color.red("{R}")}')
         str = str.replace('{B}', f'{color.black("{B}")}')
