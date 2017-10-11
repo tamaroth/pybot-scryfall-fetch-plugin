@@ -12,22 +12,72 @@ class card(plugin):
     @doc('card <cardname>: show card description of <cardname>')
     def card(self, sender_nick, args, **kwargs):
         if not args: return
-        for line in MtgCard().get_card(args):
+        for line in ScryFall.get_card(args):
             self.bot.say(line)
 
-class MtgCard:
-    def fetch_card_data(self, uri):
+
+class ScryFall:
+    @classmethod
+    def get_card(cls, card_name):
+        cls.error = ''
+        text = cls.__fetch_card_details(card_name)
+        if not text:
+            text.append(cls.error)
+        return text
+
+    @classmethod
+    def __fetch_card_details(cls, card_name):
+        possible_cards = {}
+        text = []
+        cards = cls.__fetch_card_data(f'https://api.scryfall.com/cards/search?q={"+".join(card_name)}')
+        if not cards:
+            return text
+
+        for card_info in cards:
+            name = card_info['name']
+            uri = card_info['prints_search_uri']
+            if name.lower() == ' '.join(card_name).lower():
+                return cls.__get_card_text_from_uri(uri)
+            possible_cards[name] = uri
+
+        if len(possible_cards) == 1:
+            name, uri = possible_cards.popitem()
+            return cls.__get_card_text_from_uri(uri)
+
+        text = ['Possible cards: ', '|'.join(possible_cards)]
+        return text
+
+    @classmethod
+    def __get_card_text_from_uri(cls, uri):
+        return CardParser.get_card_text(cls.__fetch_card_data(uri))
+
+    @classmethod
+    def __fetch_card_data(cls, uri):
         try:
             with urlopen(uri) as response:
                 return loads(response.read().decode('utf-8'))['data']
         except URLError:
-            self.error = 'Couldn\'t find the card!'
+            cls.error = 'Couldn\'t find the card!'
             return []
         except HTTPError:
-            self.error = 'Couldn\'t find the card!'
+            cls.error = 'Couldn\'t find the card!'
             return []
 
-    def decorate_mana_cost(self, str):
+
+class CardParser:
+    @classmethod
+    def get_card_text(cls, card_data):
+        cls.card_data = card_data
+        lines = []
+        if len(cls.card_data) > 0:
+            cls.card_info = cls.card_data[0]
+            lines = [f'{cls.__get_name()} {cls.__get_cost()} |{cls.__get_type()}|{cls.__get_pt()} - {cls.__get_rarity()}']
+            lines += cls.__get_oracle()
+            lines.append(cls.__get_sets())
+        return lines
+
+    @classmethod
+    def __decorate_mana_cost(cls, text):
         colours = {
             '{W}': f'{color.yellow("{W}")}',
             '{U}': f'{color.blue("{U}")}',
@@ -36,78 +86,56 @@ class MtgCard:
             '{G}': f'{color.green("{G}")}'
         }
         for key, value in colours.items():
-            str = str.replace(key, value)
-        return str
+            text = text.replace(key, value)
+        return text
 
-    def get_name(self):
-        return f'{color.white(self.card_info["name"])}'
+    @classmethod
+    def __get_rarity(cls):
+        rarity = {
+            'common': f'{color.black("common")}',
+            'uncommon': f'{color.light_grey("uncommon")}',
+            'rare': f'{color.blue("rare")}',
+            'mythic': f'{color.orange("mythic")}'
+        }
+        for key, value in rarity.items():
+            if key == cls.card_info['rarity']:
+                return value
+        return 'unknown rarity!'
 
-    def get_cost(self):
-        return f'{self.decorate_mana_cost(self.card_info["mana_cost"])}'
+    @classmethod
+    def __get_name(cls):
+        return f'{color.purple(cls.card_info["name"])}'
 
-    def get_type(self):
-        return f'{self.decorate_mana_cost(self.card_info["type_line"])}'
+    @classmethod
+    def __get_cost(cls):
+        return f'{cls.__decorate_mana_cost(cls.card_info["mana_cost"])}'
 
-    def get_oracle(self):
+    @classmethod
+    def __get_type(cls):
+        return f'{cls.card_info["type_line"]}'
+
+    @classmethod
+    def __get_oracle(cls):
         try:
-            return self.card_info['oracle_text'].split('\n')
+            return cls.__decorate_mana_cost(cls.card_info['oracle_text']).split('\n')
         except KeyError:
             return []
 
-    def get_pt(self):
+    @classmethod
+    def __get_pt(cls):
         try:
-           p = self.card_info['power']
-           t = self.card_info['toughness']
+           p = cls.card_info['power']
+           t = cls.card_info['toughness']
            return f'{p}/{t}'
         except KeyError:
            return ''
 
-    def get_sets(self):
+    @classmethod 
+    def __get_sets(cls):
         try:
             sets = 'Available sets:'
-            for card in self.card_data:
+            for card in cls.card_data:
                 sets += f' {card["set"].upper()}'
             return sets
         except KeyError:
             return ''
-
-    def get_card_text(self):
-        lines = []
-        if len(self.card_data) > 0:
-            self.card_info = self.card_data[0]
-            lines = [f'{self.get_name()} {self.get_cost()} |{self.get_type()}|{self.get_pt()}']
-            lines += self.get_oracle()
-            lines.append(self.get_sets())
-        return lines
-
-    def get_card_text_from_uri(self, uri):
-        self.card_data = self.fetch_card_data(uri)
-        return self.get_card_text()
-
-    def fetch_card_details(self, card_name):
-        possible_cards = {}
-        text = []
-        cards = self.fetch_card_data(f'https://api.scryfall.com/cards/search?q={"+".join(card_name)}')
-        if not cards:
-            return text
-
-        for card_info in cards:
-            name = card_info['name']
-            uri = card_info['prints_search_uri']
-            if name.lower() == card_name:
-                return self.get_card_text_from_uri(uri)
-            possible_cards[name] = uri
-
-        if len(possible_cards) == 1:
-            name, uri = possible_cards.popitem()
-            return self.get_card_text_from_uri(uri)
-
-        text = ['Possible cards: ', '|'.join(possible_cards)]
-        return text
-
-    def get_card(self, card_name):
-        self.error = ''
-        text = self.fetch_card_details(card_name)
-        if not text:
-            text.append(self.error)
-        return text
