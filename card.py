@@ -1,10 +1,10 @@
-from plugin import *
-from urllib.request import urlopen
-from urllib.error import HTTPError
-from urllib.error import URLError
-from json import loads
+import urllib
+import json
 
-class card(plugin):
+import plugin
+
+
+class card(plugin.plugin):
     def __init__(self, bot):
         super().__init__(bot)
 
@@ -16,22 +16,27 @@ class card(plugin):
             self.bot.say(line)
 
 
+class NoCardError(Exception):
+    def __init__(self):
+        self.msg = 'Couldn\'t find the requested card!'
+
+
 class ScryFall:
     @classmethod
     def get_card(cls, card_name):
-        cls.error = ''
-        text = cls.__fetch_card_details(card_name)
-        if not text:
-            text.append(cls.error)
-        return text
+        text = []
+        try:
+            text = cls.__fetch_card_details(card_name)
+        except ScryFall.NoCardError as err:
+            text.append(err.msg)
+        finally:
+            return text
 
     @classmethod
     def __fetch_card_details(cls, card_name):
         possible_cards = {}
         text = []
         cards = cls.__fetch_card_data(f'https://api.scryfall.com/cards/search?q={"+".join(card_name)}')
-        if not cards:
-            return text
 
         for card_info in cards:
             name = card_info['name']
@@ -54,14 +59,10 @@ class ScryFall:
     @classmethod
     def __fetch_card_data(cls, uri):
         try:
-            with urlopen(uri) as response:
-                return loads(response.read().decode('utf-8'))['data']
-        except URLError:
-            cls.error = 'Couldn\'t find the card!'
-            return []
-        except HTTPError:
-            cls.error = 'Couldn\'t find the card!'
-            return []
+            with urllib.request.urlopen(uri) as response:
+                return json.loads(response.read().decode('utf-8'))['data']
+        except (urllib.error.URLError, urllib.error.HTTPError, UnicodeDecodeError):
+            raise NoCardError
 
 
 class CardParser:
@@ -130,7 +131,7 @@ class CardParser:
         except KeyError:
            return ''
 
-    @classmethod 
+    @classmethod
     def __get_sets(cls):
         try:
             sets = 'Available sets:'
