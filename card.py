@@ -32,28 +32,27 @@ class CardParser:
     :param JSON card_data: The data in JSON form of the card.
     """
 
-    def __init__(self, card_data):
-        if not card_data:
-            raise NoDataToParseError('card_data')
-        self._card_data = card_data
-        self._info = card_data[0]
+    def __init__(self, card_json):
+        if not card_json:
+            raise NoDataToParseError('card_json')
+        self._card = card_json
 
     @property
     def name(self):
         """Returns the parsed name of the card."""
-        _verify_data_key_exists('name')
-        return f'{color.purple(self._info["name"])}'
+        self._verify_data_key_exists('name')
+        return f'{color.purple(self._card["name"])}'
 
     @property
     def mana_cost(self):
         """Returns the parsed cost of the card."""
-        _verify_data_key_exists('mana_cost')
-        return f'{self._decorate_mana_cost(self._info["mana_cost"])}'
+        self._verify_data_key_exists('mana_cost')
+        return f'{self._decorate_mana_cost(self._card["mana_cost"])}'
 
     @property
     def rarity(self):
         """Returns the parsed rarity of the card."""
-        _verify_data_key_exists('rarity')
+        self._verify_data_key_exists('rarity')
         rarity = {
             'common': f'{color.black("common")}',
             'uncommon': f'{color.light_grey("uncommon")}',
@@ -61,41 +60,47 @@ class CardParser:
             'mythic': f'{color.orange("mythic")}'
         }
         for key, value in rarity.items():
-            if key == self._info['rarity']:
+            if key == self._card['rarity']:
                 return value
         return 'unknown rarity!'
 
     @property
     def type(self):
         """Returns the parsed type of the card."""
-        _verify_data_key_exists('type_line')
-        return self._info['type_line']
+        self._verify_data_key_exists('type_line')
+        return self._card['type_line']
 
     @property
     def oracle_text(self):
         """Returns the parsed oracle text of the card as a list."""
-        if 'oracle_text' not in self._info:
+        if 'oracle_text' not in self._card:
             return []
-        return self._decorate_mana_cost(self._info['oracle_text']).split('\n')
+        return self._decorate_mana_cost(self._card['oracle_text']).split('\n')
 
     @property
     def pt(self):
         """Returns the parsed power/thoughtness of the card (if present)."""
-        if not all (k in self._info for k in ('power', 'toughness')):
+        if not all (k in self._card for k in ('power', 'toughness')):
             return ''
 
-        p = self._info['power']
-        t = self._info['toughness']
+        p = self._card['power']
+        t = self._card['toughness']
         return f'{p}/{t}'
 
     @property
     def sets(self):
         """Returns the parsed list of sets in which the card is available."""
-        sets = 'Available sets:'
-        for card in cls.card_data:
+        self._verify_data_key_exists('prints_search_uri')
+
+        sets = []
+        response = Scryfall.fetch_data_as_json(self._card['prints_search_uri'])
+        _verify_key_exists_in_dict('object', response)
+        _verify_key_exists_in_dict('data', response)
+        for card in response['data']:
             if 'set' in card:
-                sets += card['set'].upper()
-        return sets
+                sets.append(card['set'].upper())
+
+        return ','.join(sets)
 
     def _decorate_mana_cost(self, text):
         colours = {
@@ -107,11 +112,11 @@ class CardParser:
         }
         for key, value in colours.items():
             text = text.replace(key, value)
+        return text
 
-    def _verify_data_key_exists(self, data_key):
+    def _verify_data_key_exists(self, key):
         """Verifies that the data key exists in the card info."""
-        if data_key not in self._info:
-            raise NoDataToParseError(data_key)
+        _verify_key_exists_in_dict(key, self._card)
 
 
 class Scryfall:
@@ -121,12 +126,12 @@ class Scryfall:
     def get_card_data(card_name=None):
         """Retrieve card details from ScryFall."""
         try:
-            return _fetch_card_details(card_name)
+            return Scryfall.fetch_card_details(card_name)
         except NoCardError as err:
             return [err.msg]
 
     @staticmethod
-    def _fetch_card_details(card_name):
+    def fetch_card_details(card_name):
         """Fetches the text detail of the card."""
 
         if card_name is None:
@@ -134,26 +139,48 @@ class Scryfall:
         else:
             endpoint = f'/cards/search?q={"+".join(card_name)}'
 
-        cards = _fetch_card_data(f'{SCRYFALL_API_ADDRESS}{endpoint}')
-        for card in cards:
-            name = card['name']
-            uri = card['prints_search_uri']
-            if name.lower() == ' '.join(card_name).lower():
-                return _fetch_card_data(uri)
-            possible_cards[name] = uri
+        response = Scryfall.fetch_data_as_json(f'{SCRYFALL_API_ADDRESS}{endpoint}')
+        if 'object' not in response:
+            raise NoCardError
 
-        if len(possible_cards) > 1:
-            return ['Possible cards: ', '|'.join(possible_cards)]
+        object_type = response['object']
 
-        _, uri = possible_cards.popitem()
-        return _fetch_card_data(uri)
+        if object_type == 'card':
+            return response
+
+        if object_type == 'list':
+            if response['total_cards'] == 1:
+                return response['data'][0]
+            possible_cards = []
+            return {
+                'possible_cards': Scryfall.get_possible_cards(response, possible_cards),
+                'possible_cards_count': response['total_cards'],
+            }
+        else:
+            raise NoCardError
 
     @staticmethod
-    def _fetch_card_data(uri):
+    def get_possible_cards(card_object, possible_cards):
+        """Returns a list of possible cards from the given card list object."""
+        assert card_object['object'] == 'list', 'card_object is not a list...'
+        assert 'data' in card_object, 'data was not found in card object...'
+        assert 'has_more' in card_object, 'has_more was not found in card object..'
+
+        for card in card_object['data']:
+            possible_cards.append(card['name'])
+
+        if card_object['has_more'] == 'true':
+            new_cards = Scryfall.fetch_data_as_json(card_object['next_page'])
+            return Scryfall.get_possible_cards(new_cards, possible_cards)
+
+        return possible_cards
+
+    @staticmethod
+    def fetch_data_as_json(uri):
         """Fetches the raw data from the URI."""
         try:
             with urllib.request.urlopen(uri) as response:
-                return json.loads(response.read().decode('utf-8'))['data']
+                return json.loads(response.read().decode('utf-8'))
         except (urllib.error.URLError, urllib.error.HTTPError, UnicodeDecodeError):
             raise NoCardError
 
@@ -171,17 +198,27 @@ class Card:
     def formatted(self):
         """Returns a list of lines that describe the given card."""
         try:
+            if 'possible_cards' in self._card_data:
+                result = [f'Possible cards ({self._card_data["possible_cards_count"]})']
+                if self._card_data['possible_cards_count'] <= 10:
+                    result.append('|'.join(self._card_data['possible_cards']))
+                else:
+                    result.append('First 10 cards: ')
+                    result.append('|'.join(self._card_data['possible_cards'][:10]))
+                return result
+
             parser = CardParser(self._card_data)
-            return [
-                f'{parser.name} {parser.cost} |{parser.type}|{parser.pt} - {parser.rarity}',
-                parser.oracle_text,
-                parser.sets
+            result = [
+                f'{parser.name} {parser.mana_cost} |{parser.type}|{parser.pt} - {parser.rarity}',
             ]
+            result += parser.oracle_text
+            result.append(parser.sets)
+            return result
         except NoDataToParseError as err:
             return [err.msg]
 
 
-class card(plugin.plugin):
+class card(plugin):
     """Plugin's commands."""
 
     def __init__(self, bot):
@@ -190,6 +227,15 @@ class card(plugin.plugin):
     @command
     @doc('card <cardname>: show card description of <cardname>')
     def card(self, sender_nick, args, **kwargs):
-        card = Card(args)
+        if not args:
+            card = Card()
+        else:
+            card = Card(args)
         for line in card.formatted:
             self.bot.say(line)
+
+
+def _verify_key_exists_in_dict(key, d):
+    """Verifies that key exists in the dictionary."""
+    if key not in d:
+        raise NoDataToParseError(key)
